@@ -101,6 +101,10 @@ def explain(run_id: str, wid: str) -> dict:
     return _call("POST", f"/v1/runs/{run_id}/windows/{wid}/explain")
 
 
+def compare(run_id: str, wid: str) -> dict:
+    return _call("POST", f"/v1/runs/{run_id}/windows/{wid}/compare")
+
+
 def override(run_id: str, wid: str, tier: str, clinician: str, reason: str) -> dict:
     return _call("POST", f"/v1/runs/{run_id}/windows/{wid}/override",
                  json={"tier": tier, "clinician": clinician, "reason": reason})

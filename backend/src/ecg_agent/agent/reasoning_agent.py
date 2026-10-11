@@ -58,9 +58,14 @@ SOURCE_WORDS = {"gemma": "Gemma", "replay": "Gemma (recorded answer)", "offline-
                 "rule": "the triage rule", "mock": "a simulated receiver"}
 
 
+COMPARE_CHANNELS = ("adapter", "filtered")  # the learned channel vs the text channel it competes with
+MEASURED = ("source", "prompt_tokens", "decision_ms", "latency_ms", "energy_j")
+
+
 class RState(TypedDict, total=False):
     queue: list  # window messages still to triage this turn
     xqueue: list  # window messages sent for an explanation
+    cqueue: list  # window messages sent to measure the other channel (comparison only, never changes a finding)
     current: dict  # the window message being triaged, with its result
     plan_steps: int
     finish: bool
@@ -93,11 +98,13 @@ class ReasoningAgent:
     # ----- graph -----
     def _build(self):
         g = StateGraph(RState)
-        for n in ("observe", "explain_window", "triage", "verify", "plan", "report"):
+        for n in ("observe", "explain_window", "compare_window", "triage", "verify", "plan", "report"):
             g.add_node(n, getattr(self, f"_{n}"))
         g.add_edge(START, "observe")
-        g.add_conditional_edges("observe", self._after_observe, ["explain_window", "triage", "plan", END])
-        g.add_conditional_edges("explain_window", self._after_observe, ["triage", "plan", END])
+        nxt = ["explain_window", "compare_window", "triage", "plan", END]
+        g.add_conditional_edges("observe", self._after_observe, nxt)
+        g.add_conditional_edges("explain_window", self._after_observe, nxt)
+        g.add_conditional_edges("compare_window", self._after_observe, nxt)
         g.add_edge("triage", "verify")
         g.add_conditional_edges("verify", lambda s: "triage" if s.get("queue") else (
             "plan" if not self.outbox and self.report is None else END), ["triage", "plan", END])
@@ -109,7 +116,7 @@ class ReasoningAgent:
         """A window the orchestrator refused (e.g. a latent message that breaks the version contract) counts as a
         failed attempt on that channel: ask for the next channel, or settle on the screening tier for human review."""
         wid, channel = m.content.get("window_id"), m.content.get("channel")
-        if m.intent != "window" or not wid or wid in self.findings or m.content.get("purpose") == "explain":
+        if m.intent != "window" or not wid or wid in self.findings or m.content.get("purpose") in ("explain", "compare"):
             return
         tries = self.attempts.setdefault(wid, [])
         tries.append({"channel": channel, "tier": None, "verdict": "refused", "source": "orchestrator",
@@ -129,10 +136,12 @@ class ReasoningAgent:
     def _after_observe(self, s: RState) -> str:
         if self.failed:
             return END
-        if self.outbox and not s.get("queue") and not s.get("xqueue"):
+        if self.outbox and not s.get("queue") and not s.get("xqueue") and not s.get("cqueue"):
             return END  # a resend after a refusal is already on its way
         if s.get("xqueue"):
             return "explain_window"
+        if s.get("cqueue"):
+            return "compare_window"
         if s.get("queue"):
             return "triage"
         return END if self.report is not None else "plan"  # after the report, turns only serve explanations
@@ -152,7 +161,7 @@ class ReasoningAgent:
 
     # ----- nodes -----
     async def _observe(self, s: RState) -> RState:
-        windows, for_explaining = [], []
+        windows, for_explaining, for_comparing = [], [], []
         for m in s.get("queue", []):
             if m.intent == "record_ready" and m.performative == "failure":
                 self.failed = m.content.get("error", "perception failed")
@@ -178,8 +187,10 @@ class ReasoningAgent:
                                        **m.content)
                 await self._after_refusal(m)
             elif m.intent == "window":
-                (for_explaining if m.content.get("purpose") == "explain" else windows).append(m)
-        return {"queue": windows, "xqueue": for_explaining}
+                purpose = m.content.get("purpose")
+                (for_explaining if purpose == "explain" else for_comparing if purpose == "compare"
+                 else windows).append(m)
+        return {"queue": windows, "xqueue": for_explaining, "cqueue": for_comparing}
 
     async def _triage(self, s: RState) -> RState:
         m, rest = s["queue"][0], s["queue"][1:]
@@ -221,6 +232,7 @@ class ReasoningAgent:
         tries = self.attempts.setdefault(wid, [])
         tries.append({"channel": res.channel, "tier": res.tier, "verdict": verdict, "source": res.source,
                       "prompt_tokens": res.prompt_tokens, "latency_ms": res.latency_ms, "ttft_ms": res.ttft_ms,
+                      "decision_ms": res.decision_ms, "energy_j": res.energy_j,
                       "justification": res.justification, "guideline_fact": res.guideline_fact,
                       "reason": m.content.get("reason")})
 
@@ -550,6 +562,44 @@ class ReasoningAgent:
                 await self._by_rule(wid, m, f"{c['channel']} text decided {d.tier}, not {final}")
         await self._maybe_answer()
         return {"xqueue": []}
+
+    # ----- channel comparison: the same decision over the adapter and over text, measured, for display only -----
+    def comparison(self, wid: str) -> dict:
+        """What one decision on this window cost over each channel. Measurements made during the review are reused;
+        the rest come from ``request_comparison``. Never changes the finding: the guardrail already decided it."""
+        f = self.findings[wid]
+        out = {t["channel"]: {"tier": t["tier"], "from": "review", **{k: t.get(k) for k in MEASURED}}
+               for t in f["attempts"] if t["source"] in ("gemma", "replay", "mock") and t["tier"] is not None}
+        out.update(f.get("comparison", {}))
+        return {c: out[c] for c in COMPARE_CHANNELS if c in out}
+
+    async def request_comparison(self, wid: str) -> list[Message]:
+        if wid not in self.findings:
+            raise KeyError(f"{wid} has no finding to compare")
+        have = self.comparison(wid)
+        missing = [c for c in COMPARE_CHANNELS if c not in have]
+        msgs = []
+        for c in missing:
+            metrics.messages.labels(sender=NAME, intent="request_window").inc()
+            msgs.append(Message(sender=NAME, recipient="perception", performative="request", intent="request_window",
+                                content={"window_id": wid, "channel": c, "purpose": "compare",
+                                         "reason": "measure the same decision over the other channel"}))
+        return msgs
+
+    async def _compare_window(self, s: RState) -> RState:
+        for m in s.get("cqueue", []):
+            c, wid = m.content, m.content["window_id"]
+            req = TriageRequest(channel=c["channel"], events=c["events"], vectors=c["payload"].get("vectors"),
+                                mode="decision", sender_sha256=c["payload"].get("sender_sha256"))
+            res = await call_tool(self.tracer, NAME, "triage", lambda req=req: self.receiver.triage(req),
+                                  self.budget.receiver_timeout_s, window=wid, purpose="compare")
+            self.findings[wid].setdefault("comparison", {})[c["channel"]] = {
+                "tier": res.tier, "from": "comparison", "source": res.source,
+                **{k: getattr(res, k) for k in MEASURED if k != "source"}}
+            await self.tracer.emit(NAME, "tool", f"Measured {wid} over {c['channel']}: {res.prompt_tokens} prompt "
+                                   f"tokens, decision in {res.decision_ms or res.latency_ms or 0:.0f} ms",
+                                   window=wid, channel=c["channel"], tier=res.tier, purpose="compare")
+        return {"cqueue": []}
 
     async def _by_receiver(self, wid: str, m: Message, tier: str) -> dict:
         c = m.content
