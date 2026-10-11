@@ -101,7 +101,8 @@ if running:
 windows = {w["id"]: w for w in d["windows"]}
 findings = d["findings"]
 duration = (d.get("summary") or {}).get("duration_s") or 0
-tab_ecg, tab_find, tab_ask, tab_audit = st.tabs(["📈 ECG", "🔎 Findings", "🩺 Ask", "🧾 Audit trail"])
+tab_ecg, tab_find, tab_cmp, tab_ask, tab_audit = st.tabs(["📈 ECG", "🔎 Findings", "⚖️ Adapter vs text", "🩺 Ask",
+                                                           "🧾 Audit trail"])
 
 
 def shade(fig, w0=0.0, w1=1e9):
@@ -223,6 +224,78 @@ with tab_find:
                             st.rerun()
                         except api.ApiError as e:
                             st.error(e.detail)
+
+# ----- adapter vs text -----
+with tab_cmp:
+    st.caption("Every reviewed window, decided twice by the same frozen Gemma: once reading the perception agent's "
+               "learned vectors as virtual tokens (4 per beat, through the trained adapter), once reading the beats "
+               "written out as filtered text. Same question, same decision step, measured on the GPU per call.")
+    cmps = d.get("comparisons") or {}
+    todo = [w for w in sorted(findings) if len(cmps.get(w, {})) < 2]
+    if todo and st.button(f"Measure both channels for {len(todo)} window(s)", type="primary"):
+        with st.spinner("Asking for each window over the other channel (through the orchestrator)..."):
+            for w in todo:
+                try:
+                    api.compare(run_id, w)
+                except api.ApiError as e:
+                    st.error(f"{w}: {e.detail}")
+                    break
+        st.rerun()
+
+    def val(m: dict | None, key: str):
+        return (m or {}).get(key)
+
+    rows, both = [], []
+    for w in sorted(findings):
+        a, t = cmps.get(w, {}).get("adapter"), cmps.get(w, {}).get("filtered")
+        ms = lambda m: val(m, "decision_ms") or val(m, "latency_ms")  # noqa: E731
+        rows.append({"window": w, "beats (abnormal)": f"{findings[w].get('n') or '?'} ({findings[w].get('abnormal')})",
+                     "adapter tier": ui.tier_badge(val(a, "tier")) if a and a.get("tier") else "—",
+                     "text tier": ui.tier_badge(val(t, "tier")) if t and t.get("tier") else "—",
+                     "adapter tokens": val(a, "prompt_tokens"), "text tokens": val(t, "prompt_tokens"),
+                     "adapter time (s)": round(ms(a) / 1e3, 2) if ms(a) else None,
+                     "text time (s)": round(ms(t) / 1e3, 2) if ms(t) else None,
+                     "adapter energy (J)": val(a, "energy_j"), "text energy (J)": val(t, "energy_j")})
+        if val(a, "prompt_tokens") and val(t, "prompt_tokens"):
+            both.append(rows[-1])
+    sources = {val(m, "source") for c in cmps.values() for m in c.values()} - {None}
+    if not both:
+        st.info("Nothing measured on both channels yet." if sources - {"offline-rule"} else
+                "This deployment answers with the rule (no GPU), so there are no Gemma calls to measure.")
+    else:
+        def total(key):
+            vals = [r[key] for r in both if r[key] is not None]
+            return sum(vals) if len(vals) == len(both) else None
+
+        c1, c2, c3 = st.columns(3)
+        for col, label, ak, tk, fmt in ((c1, "Prompt tokens Gemma read", "adapter tokens", "text tokens", "{:,.0f}"),
+                                        (c2, "Time to the decision", "adapter time (s)", "text time (s)", "{:.1f} s"),
+                                        (c3, "GPU energy", "adapter energy (J)", "text energy (J)", "{:,.0f} J")):
+            ta, tt = total(ak), total(tk)
+            if ta is None or tt is None:
+                col.metric(label, "not measured")
+                continue
+            col.metric(f"{label} ({len(both)} windows)", "adapter " + fmt.format(ta),
+                       f"{(ta - tt) / tt:+.0%} vs text ({fmt.format(tt)})", delta_color="inverse")
+        fig = go.Figure([go.Bar(name="adapter (virtual tokens)", x=[r["window"] for r in both],
+                                y=[r["adapter tokens"] for r in both]),
+                         go.Bar(name="filtered text", x=[r["window"] for r in both], y=[r["text tokens"] for r in both])])
+        fig.update_layout(barmode="group", height=260, margin=dict(l=0, r=0, t=30, b=0), yaxis_title="prompt tokens",
+                          title="Prompt tokens per window", legend=dict(orientation="h", y=-0.25))
+        st.plotly_chart(fig, use_container_width=True)
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    same = sum(1 for r in both if r["adapter tier"] == r["text tier"])
+    notes = []
+    if both:
+        notes.append(f"The two channels gave the same tier on {same} of {len(both)} windows.")
+    if "replay" in sources:
+        notes.append("Measured on an RTX 5070 when these answers were recorded; this demo replays them (no GPU here).")
+    notes.append("Text grows with every abnormal beat it lists; the adapter costs 4 tokens per beat whatever the beats "
+                 "are. Filtered text is the more accurate channel (0.11-0.17 balanced accuracy higher in the paper), "
+                 "so the router uses it when it is small, and the guardrail re-sends any adapter answer below the "
+                 "screening tier. Time and energy here are the decision step only; explanations are written later, "
+                 "on request.")
+    st.caption(" ".join(notes))
 
 # ----- questions -----
 with tab_ask:

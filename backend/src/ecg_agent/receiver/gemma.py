@@ -49,6 +49,28 @@ class _StepClock(LogitsProcessor):
         return scores
 
 
+def _nvml_handle():
+    """GPU 0's NVML handle, or None where NVML is unavailable (energy is then reported as unknown, never guessed)."""
+    try:
+        import pynvml
+
+        pynvml.nvmlInit()
+        h = pynvml.nvmlDeviceGetHandleByIndex(0)
+        pynvml.nvmlDeviceGetTotalEnergyConsumption(h)  # not every GPU exposes the counter
+        return h
+    except Exception:  # noqa: BLE001 - optional measurement
+        return None
+
+
+def _energy_mj(handle) -> float | None:
+    """Total energy since driver load, in millijoules (NVML); differences give the energy of one call."""
+    if handle is None:
+        return None
+    import pynvml
+
+    return float(pynvml.nvmlDeviceGetTotalEnergyConsumption(handle))
+
+
 class GemmaEngine:
     def __init__(self, adapter_checkpoint: str | Path, load_in_4bit: bool = True):
         from transformers import AutoProcessor, BitsAndBytesConfig, Gemma4ForConditionalGeneration
@@ -67,6 +89,8 @@ class GemmaEngine:
         ck = torch.load(adapter_checkpoint, map_location="cpu", weights_only=False)
         self.adapter = MultiEventVirtualAdapter.from_state_dict(ck["adapter_state_dict"]).to(self.device)
         self.lock = threading.Lock()  # one GPU, one generation at a time
+        self._gpu = _nvml_handle()
+        self.last_energy_j: float | None = None
         self._scaffold: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
         self._warm()
 
@@ -94,12 +118,15 @@ class GemmaEngine:
         start = inputs["input_ids"].shape[1] if "input_ids" in inputs else 0
         stops = StoppingCriteriaList([DecisionStop(self.table, start)]) if stop_at_tier else None
         torch.cuda.synchronize()
+        e0 = _energy_mj(self._gpu)
         t0 = time.perf_counter()
         with torch.no_grad():
             out = self.model.generate(**inputs, do_sample=False, max_new_tokens=max_new, logits_processor=procs,
                                       stopping_criteria=stops)
         torch.cuda.synchronize()
         t1 = time.perf_counter()
+        e1 = _energy_mj(self._gpu)
+        self.last_energy_j = round((e1 - e0) / 1e3, 1) if e0 is not None and e1 is not None else None
         gen = out[0][start:]
         n_gen = int((gen != self.tok.pad_token_id).sum())
         st = clock.stamps
@@ -147,7 +174,7 @@ class GemmaEngine:
             raw, n_gen, ms, ttft, decision = self._run(inputs, constrained=True, max_new=MAX_NEW,
                                                        stop_at_tier=decide)
         base = dict(channel=req.channel, prompt_tokens=n_prompt, generated_tokens=n_gen, latency_ms=ms, ttft_ms=ttft,
-                    decision_ms=decision, raw=raw, mode=req.mode)
+                    decision_ms=decision, energy_j=self.last_energy_j, raw=raw, mode=req.mode)
         if decide:
             tier = next((t for t in TIERS if raw.startswith(OPEN + t)), None)
             return TriageResult(tier=tier, parsed=tier is not None, **base)
@@ -168,7 +195,7 @@ class GemmaEngine:
             raw, n_gen, ms, ttft, _ = self._run(inputs, constrained=True, max_new=MAX_NEW, start_part=DECISION_PARTS)
         full = OPEN + tier + raw
         base = dict(channel=req.channel, prompt_tokens=n_prompt, generated_tokens=n_gen, latency_ms=ms, ttft_ms=ttft,
-                    raw=full, mode="explain")
+                    energy_j=self.last_energy_j, raw=full, mode="explain")
         try:
             ans = extract_last_json_object(full)
             return TriageResult(tier=tier, justification=ans["justification"],

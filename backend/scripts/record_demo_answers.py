@@ -66,6 +66,7 @@ def main() -> None:
                     d = wait(c, c.post("/v1/runs", json=body).json()["id"])
                     for wid in sorted(d["findings"]):
                         c.post(f"/v1/runs/{d['id']}/windows/{wid}/explain")
+                        c.post(f"/v1/runs/{d['id']}/windows/{wid}/compare")  # the "Adapter vs text" tab
                     asked = 0
                     if mode == "balanced" and scen is None and d["findings"]:
                         f = d["findings"]

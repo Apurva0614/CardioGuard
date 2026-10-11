@@ -33,7 +33,12 @@ def run_doc(status):
             "findings": {"w000": FINDING} if complete else {}, "summary": {"beats": 300, "duration_s": 300.0}
             if status != "unreadable" else {}, "windows": [WINDOW] if complete else [],
             "answers": [{"question": "Why?", "text": "Because.", "type": "explain", "citations": ["m00004"],
-                         "data": {}}] if complete else [], "overrides": []}
+                         "data": {}}] if complete else [], "overrides": [],
+            "comparisons": {"w000": {
+                "adapter": {"tier": "priority", "source": "replay", "prompt_tokens": 713, "decision_ms": 1290.0,
+                            "energy_j": 85.0},
+                "filtered": {"tier": "urgent", "source": "replay", "prompt_tokens": 2480, "decision_ms": 1610.0,
+                             "energy_j": 104.0}}} if complete else {}}
 
 
 def fake_api(status="complete"):
@@ -94,7 +99,9 @@ def test_recording_page(page, status):
     else:
         assert [m.value for m in at.metric][0].endswith("urgent")
         assert any("noise level" in w.value for w in at.warning)
-        assert len(at.tabs) == 4
+        assert len(at.tabs) == 5
+        tokens = next(m for m in at.metric if m.label.startswith("Prompt tokens"))
+        assert tokens.value == "adapter 713" and tokens.delta.startswith("-71%")  # (713 - 2480) / 2480
 
 
 def test_about(page):

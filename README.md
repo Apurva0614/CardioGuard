@@ -57,6 +57,18 @@ Design notes, including stakeholders, autonomy levels, the hazard log and every 
 
 ![A clinician question answered with a citation, and a medication question refused before any LLM sees it](docs/images/questions.png)
 
+### What the learned adapter buys: every decision, measured both ways
+
+Each reviewed window is decided twice by the same frozen Gemma: once from the perception agent's learned vectors,
+turned into 4 virtual tokens per beat by the trained adapter, and once from the beats written out as filtered text.
+Across all 42 windows the demo reviews (7 records, balanced mode), the adapter used **35% fewer prompt tokens, 15% less
+time to the decision and 18% less GPU energy**, with the same tier on 38 of 42. On abnormal-heavy record 233 (below)
+the saving is 60% of tokens, because text grows with every abnormal beat it lists while the adapter's cost is flat.
+Filtered text remains the more accurate channel, so the router uses it while it is small, and the guardrail re-sends
+any adapter answer below the screening tier.
+
+![Adapter vs text for record 233: prompt tokens, time and GPU energy per window, adapter 60% fewer tokens](docs/images/compare.png)
+
 ## Results
 
 All numbers are measured, with the scripts that produce them in this repository ([docs/benchmarks.md](docs/benchmarks.md)).

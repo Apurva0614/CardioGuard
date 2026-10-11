@@ -145,3 +145,17 @@ def test_demo_presets_pin_runs_to_the_recorded_settings():
         r = c.post("/v1/runs", json={"record": "233", "start_s": 123, "duration_s": 60, "max_reviews": 2}).json()
         assert (r["params"]["start_s"], r["params"]["duration_s"]) == (0.0, 300.0)
         assert wait(c, r["id"])["status"] == "complete"
+
+
+def test_channel_comparison_measures_both_and_changes_nothing(done):
+    c, d = done
+    wid = sorted(d["findings"])[0]
+    before = d["findings"][wid]["final_tier"]
+    cmp = c.post(f"/v1/runs/{d['id']}/windows/{wid}/compare").json()
+    assert set(cmp) == {"adapter", "filtered"}  # the learned channel and the text channel it competes with
+    assert all(v["tier"] for v in cmp.values())
+    after = c.get(f"/v1/runs/{d['id']}").json()["findings"][wid]
+    assert after["final_tier"] == before  # a measurement, never a second opinion on the finding
+    audit = c.get(f"/v1/runs/{d['id']}/audit").json()
+    assert any((r.get("content") or {}).get("purpose") == "compare" for r in audit)  # through the orchestrator
+    assert c.post(f"/v1/runs/{d['id']}/windows/{wid}/compare").json() == cmp  # measured once, then reused

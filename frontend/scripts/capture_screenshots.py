@@ -78,6 +78,14 @@ def main() -> None:
         page.get_by_text("Each row is one window").wait_for(timeout=TIMEOUT)
         shot(page, "findings", page.get_by_role("tabpanel").filter(has_text="Each row is one window"))
 
+        page.get_by_role("tab", name="⚖️ Adapter vs text").click()
+        measure = page.get_by_role("button", name="Measure both channels")
+        if measure.count():
+            measure.click()
+        page.get_by_text("Prompt tokens Gemma read").wait_for(timeout=TIMEOUT)
+        page.wait_for_timeout(2500)  # the chart
+        shot(page, "compare", page.get_by_role("tabpanel").filter(has_text="decided twice"))
+
         # 3. The worklist with all three runs, most in need of attention first.
         page.goto(base)
         page.get_by_text("Click a row to open the recording.").wait_for(timeout=TIMEOUT)

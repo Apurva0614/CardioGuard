@@ -51,6 +51,7 @@ class TriageResult(BaseModel):
     latency_ms: float | None = None
     ttft_ms: float | None = None
     decision_ms: float | None = None  # time until the tier token exists
+    energy_j: float | None = None  # GPU energy for this call (NVML counter), when the GPU service can read it
     mode: Literal["decision", "full", "explain"] = "full"
     source: Literal["gemma", "replay", "offline-rule", "mock"] = "gemma"
     raw: str = ""

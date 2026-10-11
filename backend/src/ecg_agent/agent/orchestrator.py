@@ -184,6 +184,22 @@ class Orchestrator:
                 fh.write(json.dumps(entry) + "\n")
         return entry
 
+    async def compare(self, wid: str) -> dict:
+        """Measure one finding's decision over the adapter and over filtered text. The windows travel as in the run
+        (same policy checks, mailboxes and audit log); the results are recorded beside the finding, never in it."""
+        requests = await self.r.request_comparison(wid)
+        if requests:
+            delivered, refused = await self._route(requests)
+            if delivered:
+                replies, refused_back = await self._route(await self.p.turn(delivered))
+                refused += refused_back  # e.g. a window too long for the adapter's latent envelope
+                await self.r.turn(replies)
+            for m in refused:  # record why a channel has no measurement, instead of leaving a silent gap
+                if m.content.get("channel"):
+                    self.r.findings[wid].setdefault("comparison", {})[m.content["channel"]] = {
+                        "tier": None, "from": "comparison", "note": m.content["error"]}
+        return self.r.comparison(wid)
+
     async def explain(self, wid: str) -> dict:
         """Explain one finding after the run, on request. When the reasoning agent needs the window over another
         channel, the request and the reply go through the same policy, mailboxes and audit log as the run itself."""

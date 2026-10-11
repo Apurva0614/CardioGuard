@@ -12,6 +12,7 @@
     GET  /v1/runs/{id}/audit                every message and verdict
     POST /v1/runs/{id}/questions            a clinician question
     POST /v1/runs/{id}/windows/{w}/explain  explanation for one finding
+    POST /v1/runs/{id}/windows/{w}/compare  the same decision over the adapter and filtered text, measured
     POST /v1/runs/{id}/windows/{w}/override clinician override (tier, name, reason)
     GET  /healthz, /readyz, /metrics
 
@@ -203,6 +204,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                          "findings": o.r.findings, "summary": o.p.summary, "windows": [
                              w.public() for w in o.p.windows.values()],
                          "answers": o.r.answered, "overrides": o.overrides, "steps": len(run.tracer.steps),
+                         "comparisons": {w: o.r.comparison(w) for w in o.r.findings},
                          "attempts": [{"strategy": a.strategy["why"], **a.quality} for a in o.p.attempts]})
 
     @app.get("/v1/runs/{run_id}/events")
@@ -257,6 +259,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finished(run)
         async with run.lock:
             return jsonable(await run.orch.ask(body.question))
+
+    @app.post("/v1/runs/{run_id}/windows/{wid}/compare")
+    async def compare(wid: str, request: Request, run=Depends(get_run)) -> dict:
+        """The same decision over the adapter and over filtered text: prompt tokens, time and GPU energy for each."""
+        limiter.check(request, "question", s.questions_per_minute)
+        finished(run)
+        if wid not in run.orch.r.findings:
+            raise HTTPException(404, f"{wid} has no finding")
+        async with run.lock:
+            return jsonable(await run.orch.compare(wid))
 
     @app.post("/v1/runs/{run_id}/windows/{wid}/explain")
     async def explain(wid: str, run=Depends(get_run)) -> dict:
