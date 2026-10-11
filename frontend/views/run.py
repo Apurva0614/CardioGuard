@@ -232,7 +232,10 @@ with tab_cmp:
                "written out as filtered text. Same question, same decision step, measured on the GPU per call.")
     cmps = d.get("comparisons") or {}
     todo = [w for w in sorted(findings) if len(cmps.get(w, {})) < 2]
-    if todo and st.button(f"Measure both channels for {len(todo)} window(s)", type="primary"):
+    # With recorded answers, measuring is free and instant, so fill the tab in at once: it is the first thing a
+    # visitor should see. With a live GPU it costs a Gemma call per window, so it waits for the button.
+    replay = (st.session_state.get("status") or {}).get("receiver") == "replay"
+    if todo and (replay or st.button(f"Measure both channels for {len(todo)} window(s)", type="primary")):
         with st.spinner("Asking for each window over the other channel (through the orchestrator)..."):
             for w in todo:
                 try:

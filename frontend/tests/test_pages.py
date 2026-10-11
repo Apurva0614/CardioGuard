@@ -106,3 +106,29 @@ def test_recording_page(page, status):
 
 def test_about(page):
     assert not page("views/about.py").exception
+
+
+@pytest.mark.parametrize("receiver,auto", [("replay", True), ("http", False)])
+def test_adapter_tab_fills_in_by_itself_only_with_recorded_answers(monkeypatch, receiver, auto):
+    """Recorded answers: measuring is free, so the tab fills in at once. Live GPU: one Gemma call per window, so it
+    waits for the button."""
+    monkeypatch.syspath_prepend(str(FRONTEND))
+    fake, doc, calls = fake_api("complete"), run_doc("complete"), []
+    measured, doc["comparisons"] = doc["comparisons"], {}
+
+    def compare(rid, wid):  # like the API: once measured, the run carries the comparison
+        calls.append(wid)
+        doc["comparisons"][wid] = measured[wid]
+        return measured[wid]
+
+    fake.compare, fake.run = compare, (lambda rid: doc)
+    monkeypatch.setitem(sys.modules, "api", fake)
+    at = AppTest.from_file(str(FRONTEND / "views/run.py"), default_timeout=20)
+    at.session_state["status"] = {**STATUS, "receiver": receiver}
+    at.session_state["run_id"] = "r1"
+    at.run()
+    assert not at.exception, at.exception
+    assert calls == (["w000"] if auto else [])  # measured exactly once, and only where it is free
+    has_button = any(b.label.startswith("Measure both channels") for b in at.button)
+    assert has_button != auto
+    assert any(m.label.startswith("Prompt tokens") for m in at.metric) == auto

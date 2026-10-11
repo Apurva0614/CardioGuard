@@ -263,7 +263,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/v1/runs/{run_id}/windows/{wid}/compare")
     async def compare(wid: str, request: Request, run=Depends(get_run)) -> dict:
         """The same decision over the adapter and over filtered text: prompt tokens, time and GPU energy for each."""
-        limiter.check(request, "question", s.questions_per_minute)
+        # Its own bucket: the page asks once per reviewed window (up to max_reviews per run), which would use up the
+        # question allowance after a few runs. Still bounded, because with a live GPU each call is a Gemma call.
+        limiter.check(request, "compare", s.questions_per_minute * s.max_reviews)
         finished(run)
         if wid not in run.orch.r.findings:
             raise HTTPException(404, f"{wid} has no finding")
