@@ -48,3 +48,8 @@ build/
 
 # MLflow tracking database and artifacts (rebuilt by backend/scripts/mlops_registry.py)
 mlops/
+
+# Local runtime logs and scratch scripts
+logs/
+scratch_health.py
+
