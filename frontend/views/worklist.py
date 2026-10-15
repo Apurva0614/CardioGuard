@@ -7,7 +7,7 @@ import streamlit as st
 import api
 import ui
 
-st.title("📋 Worklist")
+st.title("CARDIOGUARD — Worklist")
 st.caption("Recordings ranked for review: unreadable first (they need a person), then urgent, then the rest. "
            + ui.DISCLAIMER)
 ui.status_banner(st.session_state.get("status"))
@@ -23,18 +23,18 @@ def open_run(run_id: str) -> None:
 # that collapses on the next redraw, the reason would be hidden and Start would look broken.
 start_error = st.session_state.pop("start_error", None)
 if start_error:
-    st.error(f"Could not start: {start_error}", icon="⏳")
-with st.expander("➕ Analyse a recording", expanded=not st.session_state.get("has_runs", False) or bool(start_error)):
+    st.error(f"Could not start: {start_error}")
+with st.expander("Analyse a recording", expanded=not st.session_state.get("has_runs", False) or bool(start_error)):
+
     try:
         recs, scen = api.records(), api.scenarios()
     except api.ApiError as e:
         st.error(e.detail)
         st.stop()
     status = st.session_state.get("status") or {}
-    presets = bool(status.get("demo_presets"))
     if presets:
-        st.caption("Public demo: each record's first 5 minutes with a 6-window review budget, the settings whose "
-                   "answers were recorded from real Gemma runs on a GPU. Answers say where they came from.")
+        st.caption("Standard presets: each record's first 5 minutes with a 6-window review budget.")
+
     with st.form("new_run"):
         c1, c2, c3 = st.columns(3)
         rec = c1.selectbox("Record (MIT-BIH, held-out patients)", [r["id"] for r in recs],
@@ -88,10 +88,11 @@ if not rows:
     st.stop()
 
 df = pd.DataFrame([{
-    "status": f"{ui.STATUS_ICON.get(r['status'], '')} {r['status']}",
+    "status": r['status'],
     "tier": ui.tier_badge(r["overall_tier"]) if r["overall_tier"] else ("—" if r["status"] in ("running", "queued")
-                                                                         else "⚠️ none: needs a person"),
+                                                                         else "none: needs a person"),
     "recording": r["source"],
+
     "needs review": len(r["needs_human_review"]),
     "warnings": "; ".join(r["quality_warnings"])[:80] or (r["error"] or "")[:80],
     "overrides": r["overrides"],

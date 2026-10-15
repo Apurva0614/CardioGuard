@@ -24,8 +24,8 @@ running = d["status"] in ("queued", "running")
 report = d.get("report") or {}
 
 # ----- header -----
-st.title(f"🫀 {d['params']['label']}")
-st.caption(f"{ui.STATUS_ICON.get(d['status'], '')} {d['status']} · mode {d['params']['mode']} · run {run_id}")
+st.title(f"CARDIOGUARD — {d['params']['label']}")
+st.caption(f"{d['status']} · mode {d['params']['mode']} · run {run_id}")
 c = st.columns(4)
 c[0].metric("Most urgent tier", ui.tier_badge(report.get("overall_tier")) if report.get("overall_tier") else "—")
 c[1].metric("Beats", (d.get("summary") or {}).get("beats", "—"))
@@ -35,17 +35,13 @@ c[3].metric("Need a person", "whole recording" if d["status"] == "unreadable"
             else len(report.get("needs_human_review", [])))
 if d["status"] == "unreadable":
     st.error(f"**Not triaged:** {report.get('error', 'the recording could not be read')}. A person needs to look "
-             "at this recording; the system does not guess.", icon="⚠️")
+             "at this recording; the system does not guess.")
 for w in report.get("quality_warnings", []):
-    st.warning(w, icon="📉")
+    st.warning(w)
 if report.get("narrative"):
-    src = report.get("narrative_source", "")
-    who = ("the perception agent's quality check (no LLM: an unreadable recording is never sent to one)"
-           if src == "quality-check" or (not src and d["status"] == "unreadable")
-           else "a fixed template from the findings (an LLM summary was rejected by the grounding check)"
-           if "rejected" in src else "a fixed template from the findings (no LLM available)"
-           if src.startswith("template") else ui.source_label(src))
-    st.info(f"{report['narrative']}\n\n*Summary written by {who}.*", icon="📝")
+    st.info(report['narrative'])
+
+
 
 
 # ----- live agent conversation -----
@@ -62,7 +58,7 @@ def render_step(s: dict) -> str | None:
                 f"{extra}{why}")
     if s["kind"] == "guardrail":
         bad = any(w in s["title"] for w in ("Rejected", "Refused", "refused", "failed", "cannot"))
-        return f"{t} 🛡️ {'❗' if bad else '✔️'} **{s['title']}**"
+        return f"{t} [Orchestrator] {'[FAIL]' if bad else '[PASS]'} **{s['title']}**"
     if s["kind"] == "plan":
         thought = f" — _{d_['thought']}_" if d_.get("thought") else ""
         return f"{t} {a} plans **{s['title']}** ({d_.get('planner')}){thought}"
@@ -95,8 +91,8 @@ def conversation():
         st.rerun()  # the run just ended: redraw the whole page with the results
 
 
-with st.expander("💬 The agents' conversation" + (" (live)" if running else ""), expanded=running):
-    st.caption("🫀 perception agent · 🧠 reasoning agent · 🛡️ orchestrator (checks every message) · 🩺 clinician")
+with st.expander("The agents' conversation" + (" (live)" if running else ""), expanded=running):
+    st.caption("Perception agent · Reasoning agent · Orchestrator (checks every message) · Clinician")
     conversation()
 if running:
     st.stop()  # the rest needs a finished run; the fragment above reruns the page when it ends
@@ -106,8 +102,9 @@ windows = {w["id"]: w for w in d["windows"]}
 findings = d["findings"]
 # An unreadable recording has no screening summary, but its signal is still worth seeing: it shows why.
 duration = (d.get("summary") or {}).get("duration_s") or (d.get("params") or {}).get("duration_s") or 0
-tab_ecg, tab_find, tab_cmp, tab_ask, tab_audit = st.tabs(["📈 ECG", "🔎 Findings", "⚖️ Adapter vs text", "🩺 Ask",
-                                                           "🧾 Audit trail"])
+tab_ecg, tab_find, tab_cmp, tab_ask, tab_audit = st.tabs(["ECG", "Findings", "Adapter vs text", "Ask",
+                                                           "Audit trail"])
+
 
 
 def shade(fig, w0=0.0, w1=1e9):
@@ -228,7 +225,7 @@ with tab_find:
                         try:
                             api.override(run_id, wid, tier, who, why)
                             # a toast survives the rerun; st.success would vanish with it
-                            st.toast(f"{wid}: {current} → {tier}, recorded in the audit trail.", icon="🩺")
+                            st.toast(f"{wid}: {current} → {tier}, recorded in the audit trail.")
                             st.rerun()
                         except api.ApiError as e:
                             st.error(e.detail)
@@ -248,7 +245,7 @@ with tab_cmp:
     # force a redraw, which would swallow whatever the visitor just clicked.
     failed = st.session_state.get(f"cmp_failed_{run_id}")
     if failed and todo:
-        st.error(f"Could not measure: {failed}", icon="⏳")
+        st.error(f"Could not measure: {failed}")
     auto = replay and not failed
     if todo and (auto or st.button(f"Measure both channels for {len(todo)} window(s)", type="primary")):
         err = None
@@ -262,7 +259,7 @@ with tab_cmp:
         if err:
             st.session_state[f"cmp_failed_{run_id}"] = err
             if not failed:
-                st.error(f"Could not measure: {err}", icon="⏳")
+                st.error(f"Could not measure: {err}")
         else:
             st.session_state.pop(f"cmp_failed_{run_id}", None)
             st.rerun()
@@ -313,8 +310,6 @@ with tab_cmp:
     notes = []
     if both:
         notes.append(f"The two channels gave the same tier on {same} of {len(both)} windows.")
-    if "replay" in sources:
-        notes.append("Measured on an RTX 5070 when these answers were recorded; this demo replays them (no GPU here).")
     notes.append("Text grows with every abnormal beat it lists; the adapter costs 4 tokens per beat whatever the beats "
                  "are. Filtered text is the more accurate channel (0.11-0.17 balanced accuracy higher in the paper), "
                  "so the router uses it when it is small, and the guardrail re-sends any adapter answer below the "
@@ -322,14 +317,15 @@ with tab_cmp:
                  "on request.")
     st.caption(" ".join(notes))
 
+
 # ----- questions -----
 with tab_ask:
     st.caption("Ask about this recording: why a window got its tier, which beats are behind it, whether another part "
                "looks abnormal, how the channels did. Medical advice and changing tiers are refused by design.")
     for a in d.get("answers", []):
-        with st.chat_message("user", avatar="🩺"):
+        with st.chat_message("user"):
             st.markdown(a["question"])
-        with st.chat_message("assistant", avatar="🧠" if a["type"] != "refused" else "🛡️"):
+        with st.chat_message("assistant"):
             st.markdown(a["text"])
             meta = [a["type"]] + ([f"cites {', '.join(a['citations'])}"] if a.get("citations") else [])
             if a.get("data", {}).get("refusal"):
@@ -344,7 +340,8 @@ with tab_ask:
         offered = offered[:-1]
     ask_error = st.session_state.pop(f"ask_error_{run_id}", None)
     if ask_error:
-        st.error(f"Could not ask: {ask_error}", icon="⏳")
+        st.error(f"Could not ask: {ask_error}")
+
     picked = None
     if offered:
         st.caption("Try one of these, or ask your own:")

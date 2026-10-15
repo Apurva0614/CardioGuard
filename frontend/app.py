@@ -14,19 +14,31 @@ import streamlit as st
 import api
 import ui
 
-st.set_page_config(page_title="ECG multi-agent triage", page_icon="🫀", layout="wide")
+st.set_page_config(page_title="CARDIOGUARD", layout="wide")
 
-# Page files are located from this file, not from the entry script: on Streamlit Community Cloud the entry point
-# is ../streamlit_app.py, which runs this file.
+# Hide Streamlit header, footer, and 'Hosted on Streamlit' branding
+st.markdown("""
+<style>
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+.viewerBadge_container__1QSob {display: none !important;}
+[data-testid="stStatusWidget"] {display: none !important;}
+footer {display: none !important;}
+div[class*="viewerBadge"] {display: none !important;}
+</style>
+""", unsafe_allow_html=True)
+
+# Page files are located from this file, not from the entry script
 VIEWS = Path(__file__).resolve().parent / "views"
 ui.PAGES = {
-    "worklist": st.Page(VIEWS / "worklist.py", title="Worklist", icon="📋", default=True),
-    "run": st.Page(VIEWS / "run.py", title="Recording", icon="🫀", url_path="run"),
-    "about": st.Page(VIEWS / "about.py", title="How it works", icon="🧭", url_path="about"),
+    "worklist": st.Page(VIEWS / "worklist.py", title="Worklist", default=True),
+    "run": st.Page(VIEWS / "run.py", title="Recording", url_path="run"),
 }
 pages = st.navigation(list(ui.PAGES.values()))
 
 with st.sidebar:
+    st.markdown("### CARDIOGUARD")
     st.caption(ui.DISCLAIMER)
     try:
         st.session_state["status"] = api.status()
@@ -38,3 +50,4 @@ with st.sidebar:
                    f" · uploads: {'on' if s['uploads'] else 'off'}")
 
 pages.run()
+
