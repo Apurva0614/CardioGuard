@@ -32,6 +32,7 @@ with st.expander("Analyse a recording", expanded=not st.session_state.get("has_r
         st.error(e.detail)
         st.stop()
     status = st.session_state.get("status") or {}
+    presets = bool(status.get("demo_presets"))
     if presets:
         st.caption("Standard presets: each record's first 5 minutes with a 6-window review budget.")
 

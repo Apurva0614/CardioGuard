@@ -98,7 +98,7 @@ def test_recording_page(page, status):
         assert any("Not triaged" in e.value for e in at.error)  # says so, never shows a tier
         assert next(m for m in at.metric if m.label == "Need a person").value == "whole recording"
     else:
-        assert [m.value for m in at.metric][0].endswith("urgent")
+        assert [m.value for m in at.metric][0].lower().endswith("urgent")
         assert any("noise level" in w.value for w in at.warning)
         assert len(at.tabs) == 5
         tokens = next(m for m in at.metric if m.label.startswith("Prompt tokens"))

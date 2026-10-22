@@ -1,6 +1,2 @@
-[client]
-showToolbar = false
-showTopBar = false
-
 [ui]
 hideTopBar = true
